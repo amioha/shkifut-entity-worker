@@ -21,28 +21,41 @@ async function req(method, path, params={}, body=null) {
   }
 }
 
-export async function getDocsForExtraction(limit=3) {
-  // שלוף IDs של מסמכים שיש להם chunks
-  const chunksData = await req('GET','nv_chunks',{
-    select:      'document_id',
-    order:       'document_id.asc',
-    limit:       10000,
-  });
-
-  const docIdsWithChunks = [...new Set((chunksData||[]).map(c => c.document_id))];
-  if (!docIdsWithChunks.length) return [];
-
-  // שלוף מסמכים שעדיין לא עובדו ויש להם chunks
+export async function getDocsForExtraction(limit=10) {
+  // שאילתה ישירה — מסמכים עם chunks שלא עברו extraction
   const docs = await req('GET','nv_documents',{
     select:             'id,title,year,doc_type',
     status:             'eq.done',
     entities_extracted: 'is.null',
-    id:                 `in.(${docIdsWithChunks.join(',')})`,
     order:              'id.asc',
-    limit,
+    limit:              limit * 5, // שלוף יותר כי חלקם אולי בלי chunks
   });
 
-  return docs || [];
+  if (!docs || !docs.length) return [];
+
+  // בדוק אילו מהם יש להם chunks
+  const docIds = docs.map(d => d.id);
+  const chunks = await req('GET','nv_chunks',{
+    select:      'document_id',
+    document_id: `in.(${docIds.join(',')})`,
+    limit:       1000,
+  });
+
+  const idsWithChunks = new Set((chunks||[]).map(c => c.document_id));
+
+  // מסמכים בלי chunks — סמן אותם כ-extracted כדי לא לנסות שוב
+  const withoutChunks = docs.filter(d => !idsWithChunks.has(d.id));
+  if (withoutChunks.length > 0) {
+    logger.info(`Marking ${withoutChunks.length} docs without chunks as extracted`);
+    for (const doc of withoutChunks) {
+      await req('PATCH','nv_documents',{id:`eq.${doc.id}`},{
+        entities_extracted: new Date().toISOString(),
+      }).catch(() => {});
+    }
+  }
+
+  // החזר רק מסמכים עם chunks
+  return docs.filter(d => idsWithChunks.has(d.id)).slice(0, limit);
 }
 
 export async function getDocChunks(docId) {
