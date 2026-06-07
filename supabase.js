@@ -22,13 +22,27 @@ async function req(method, path, params={}, body=null) {
 }
 
 export async function getDocsForExtraction(limit=3) {
-  return req('GET','nv_documents',{
+  // שלוף IDs של מסמכים שיש להם chunks
+  const chunksData = await req('GET','nv_chunks',{
+    select:      'document_id',
+    order:       'document_id.asc',
+    limit:       10000,
+  });
+
+  const docIdsWithChunks = [...new Set((chunksData||[]).map(c => c.document_id))];
+  if (!docIdsWithChunks.length) return [];
+
+  // שלוף מסמכים שעדיין לא עובדו ויש להם chunks
+  const docs = await req('GET','nv_documents',{
     select:             'id,title,year,doc_type',
     status:             'eq.done',
     entities_extracted: 'is.null',
+    id:                 `in.(${docIdsWithChunks.join(',')})`,
     order:              'id.asc',
     limit,
   });
+
+  return docs || [];
 }
 
 export async function getDocChunks(docId) {
