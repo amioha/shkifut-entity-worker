@@ -23,23 +23,22 @@ async function req(method, path, params={}, body=null) {
 
 export async function getDocsForExtraction(limit=3) {
   return req('GET','nv_documents',{
-    select:               'id,title,year,doc_type',
-    status:               'eq.done',
-    entities_extracted:   'is.null',
-    order:                'id.asc',
+    select:             'id,title,year,doc_type',
+    status:             'eq.done',
+    entities_extracted: 'is.null',
+    order:              'id.asc',
     limit,
   });
 }
 
 export async function getDocChunks(docId) {
   return req('GET','nv_chunks',{
-    select:      'id,content,page_number,chunk_index',
+    select:      'id,content,page_num,chunk_index',  // page_num ולא page_number
     document_id: `eq.${docId}`,
     order:       'chunk_index.asc',
   });
 }
 
-// שמור ישויות — מחזיר עם IDs
 export async function saveEntities(entities) {
   if (!entities.length) return [];
   const BATCH = 100;
@@ -55,35 +54,26 @@ export async function saveEntities(entities) {
   return saved;
 }
 
-// שמור קשרים — עם entity IDs מה-DB
 export async function saveRelationships(rels, savedEntities) {
   if (!rels.length || !savedEntities.length) return;
-
-  // בנה מפה: value_norm → entity_id
   const entityMap = {};
   savedEntities.forEach(e => {
-    if (!entityMap[e.value_norm]) entityMap[e.value_norm] = e.id;
+    if (e.value_norm && !entityMap[e.value_norm]) entityMap[e.value_norm] = e.id;
   });
-
-  // הוסף IDs לקשרים
-  const relsWithIds = rels
-    .map(r => {
-      const aId = entityMap[r.entity_a_norm];
-      const bId = entityMap[r.entity_b_norm];
-      if (!aId || !bId) return null;
-      return {
-        doc_id:        r.doc_id,
-        chunk_id:      r.chunk_id,
-        entity_a_id:   aId,
-        entity_b_id:   bId,
-        relation_type: r.relation_type,
-        context:       r.context,
-      };
-    })
-    .filter(Boolean);
-
+  const relsWithIds = rels.map(r => {
+    const aId = entityMap[r.entity_a_norm];
+    const bId = entityMap[r.entity_b_norm];
+    if (!aId || !bId) return null;
+    return {
+      doc_id:        r.doc_id,
+      chunk_id:      r.chunk_id,
+      entity_a_id:   aId,
+      entity_b_id:   bId,
+      relation_type: r.relation_type,
+      context:       r.context,
+    };
+  }).filter(Boolean);
   if (!relsWithIds.length) return;
-
   try {
     await req('POST','nv_relationships',{},relsWithIds);
     logger.debug(`Saved ${relsWithIds.length} relationships`);
@@ -100,15 +90,10 @@ export async function markDocExtracted(docId) {
 
 export async function getStats() {
   try {
-    const [extracted, pending, totalEntities] = await Promise.all([
-      req('GET','nv_documents',{select:'id',status:'eq.done','entities_extracted':'not.is.null'}),
-      req('GET','nv_documents',{select:'id',status:'eq.done','entities_extracted':'is.null'}),
-      req('GET','nv_entities',{select:'id',limit:1}),
+    const [extracted, pending] = await Promise.all([
+      req('GET','nv_documents',{select:'id',status:'eq.done',entities_extracted:'not.is.null'}),
+      req('GET','nv_documents',{select:'id',status:'eq.done',entities_extracted:'is.null'}),
     ]);
-    return {
-      extracted:      (extracted||[]).length,
-      pending:        (pending||[]).length,
-      total_entities: 'check Supabase',
-    };
+    return { extracted:(extracted||[]).length, pending:(pending||[]).length };
   } catch { return { extracted:0, pending:0 }; }
 }

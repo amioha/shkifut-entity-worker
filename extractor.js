@@ -1,64 +1,43 @@
 import axios  from 'axios';
 import logger from './logger.js';
 
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL         = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
+const MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
 
-/* =============================================
-   חלץ ישויות + קשרים מ-chunk דרך Claude
-============================================= */
 export async function extractFromChunk(chunk, docMeta) {
-
   const prompt = `אתה מומחה לחילוץ מידע ממסמכים ממשלתיים ועירוניים בישראל.
 
-חלץ מהטקסט הבא שתי רשימות:
+חלץ מהטקסט שתי רשימות:
 
-1. ישויות (entities) — כל ישות מהסוגים הבאים:
-   • person       — שם אדם (ראש עיר, מנהל, חתום על מסמך, מועצה)
-   • company      — חברה מסחרית (בע"מ, חברה)
-   • association  — עמותה / מלכ"ר (ע"ר, עמותת)
-   • supplier     — ספק / קבלן שמספק שירות לעירייה
-   • role         — תפקיד (ראש עיר, גזבר, מנכ"ל, יו"ר ועדה)
-   • amount       — סכום כסף (₪, שקל, מיליון)
-   • date         — תאריך (DD/MM/YYYY, חודש+שנה, רבעון)
-   • tender       — מספר מכרז (12/2024, מכרז מס')
-   • tavr         — מספר תב"ר (תכנית ביצוע רב שנתית)
-   • address      — כתובת רחוב
-   • project      — שם פרויקט / מיזם
+1. ישויות (entities):
+   • person       — שם אדם
+   • company      — חברה מסחרית
+   • association  — עמותה / מלכ"ר
+   • supplier     — ספק / קבלן
+   • role         — תפקיד
+   • amount       — סכום כסף
+   • date         — תאריך
+   • tender       — מספר מכרז
+   • tavr         — מספר תב"ר
+   • address      — כתובת
+   • project      — שם פרויקט
 
-2. קשרים (relationships) — בין ישויות שמצאת:
-   סוגי קשרים אפשריים:
-   • paid_to         — שילם ל / העביר כספים ל
-   • received_from   — קיבל תשלום מ
-   • contractor_of   — קבלן / ספק של / זכה במכרז
-   • signed_by       — חתום על ידי
-   • related_to      — קשור ל / מופיע יחד עם
-   • part_of         — חלק מ / שייך ל
-   • manages         — מנהל / אחראי על
-   • approved_by     — אושר על ידי
+2. קשרים (relationships):
+   • paid_to / received_from / contractor_of
+   • signed_by / related_to / part_of / manages / approved_by
 
 הוראות:
-- החזר JSON בלבד, ללא כל טקסט נוסף
-- value: הערך המדויק כפי שמופיע בטקסט
-- value_norm: גרסה מנורמלת (נקי, ללא "בע"מ"/"עמותת" בסוף)
-- context: משפט קצר מהטקסט שמסביר ההקשר
-- בקשרים: entity_a ו-entity_b הם value_norm של שתי ישויות
-- אם אין ישויות — החזר {"entities":[],"relationships":[]}
+- JSON בלבד, ללא טקסט נוסף
+- value: הערך המדויק מהטקסט
+- value_norm: גרסה מנורמלת (ללא בע"מ/עמותת/חברת)
+- context: משפט קצר מהטקסט
 
 טקסט:
 """
 ${chunk.content.slice(0, 3000)}
 """
 
-החזר JSON בדיוק בפורמט:
-{
-  "entities": [
-    {"entity_type":"person","value":"ישראל ישראלי","value_norm":"ישראל ישראלי","context":"ראש העיר חתם על..."}
-  ],
-  "relationships": [
-    {"entity_a":"עיריית נתיבות","relation_type":"paid_to","entity_b":"חברת כבישים","context":"העירייה שילמה לחברה..."}
-  ]
-}`;
+פורמט:
+{"entities":[{"entity_type":"...","value":"...","value_norm":"...","context":"..."}],"relationships":[{"entity_a":"...","relation_type":"...","entity_b":"...","context":"..."}]}`;
 
   try {
     const res = await axios.post('https://api.anthropic.com/v1/messages', {
@@ -67,7 +46,7 @@ ${chunk.content.slice(0, 3000)}
       messages:   [{ role:'user', content: prompt }],
     }, {
       headers: {
-        'x-api-key':         ANTHROPIC_KEY,
+        'x-api-key':         process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
         'Content-Type':      'application/json',
       },
@@ -85,10 +64,10 @@ ${chunk.content.slice(0, 3000)}
         chunk_id:    chunk.id,
         entity_type: e.entity_type,
         value:       String(e.value).slice(0, 500),
-        value_norm:  normalizeValue(e.value_norm || e.value, e.entity_type),
+        value_norm:  norm(e.value_norm || e.value, e.entity_type),
         context:     String(e.context || '').slice(0, 300),
-        confidence:  e.confidence || 1.0,
-        page_number: chunk.page_number || null,
+        confidence:  1.0,
+        page_number: chunk.page_num || null,
       }));
 
     const relationships = (parsed.relationships || [])
@@ -96,8 +75,8 @@ ${chunk.content.slice(0, 3000)}
       .map(r => ({
         doc_id:        docMeta.id,
         chunk_id:      chunk.id,
-        entity_a_norm: normalizeValue(r.entity_a, 'company'),
-        entity_b_norm: normalizeValue(r.entity_b, 'company'),
+        entity_a_norm: norm(r.entity_a, 'company'),
+        entity_b_norm: norm(r.entity_b, 'company'),
         relation_type: r.relation_type,
         context:       String(r.context || '').slice(0, 300),
       }));
@@ -105,28 +84,21 @@ ${chunk.content.slice(0, 3000)}
     return { entities, relationships };
 
   } catch (err) {
-    logger.warn(`Chunk extraction failed: ${err.message}`, { docId: docMeta.id });
+    logger.warn(`Chunk failed: ${err.message}`, { docId: docMeta.id });
     return { entities: [], relationships: [] };
   }
 }
 
-/* ---- נרמול ---- */
-function normalizeValue(value, type) {
+function norm(value, type) {
   let v = String(value || '').trim().replace(/\s+/g,' ');
-
   if (['supplier','company','association','person'].includes(type)) {
     v = v
-      .replace(/\s*בע["״]מ\s*$/i, '')
-      .replace(/\s*ע\.ר\.\s*$/i, '')
-      .replace(/\s*עמותת\s*/i, '')
-      .replace(/\s*חברת\s*/i, '')
-      .replace(/\s*עיריית\s*/i, 'עיריית ')
+      .replace(/\s*בע["״]מ\s*$/i,'')
+      .replace(/\s*ע\.ר\.\s*$/i,'')
+      .replace(/\s*עמותת\s*/i,'')
+      .replace(/\s*חברת\s*/i,'')
       .trim();
   }
-
-  if (type === 'amount') {
-    v = v.replace(/[,\s]/g,'').replace(/[₪]/g,'').trim();
-  }
-
+  if (type === 'amount') v = v.replace(/[,\s₪]/g,'').trim();
   return v.slice(0, 300);
 }
