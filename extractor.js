@@ -55,7 +55,18 @@ ${chunk.content.slice(0, 3000)}
 
     const text  = res.data.content?.[0]?.text || '{"entities":[],"relationships":[]}';
     const clean = text.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
-    const parsed = JSON.parse(clean);
+
+    // לוג לאבחון
+    logger.info(`Claude raw response (first 500 chars): ${clean.slice(0,500)}`, { docId: docMeta.id });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(clean);
+    } catch(parseErr) {
+      logger.error(`JSON parse failed: ${parseErr.message}`, { docId: docMeta.id });
+      logger.error(`Full raw text: ${clean}`, { docId: docMeta.id });
+      return { entities: [], relationships: [] };
+    }
 
     const entities = (parsed.entities || [])
       .filter(e => e.value && e.entity_type)
